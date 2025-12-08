@@ -1,34 +1,31 @@
 #include <Arduino.h>
-#include "driver/ledc.h"
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
 
-#define LED_PIN 4
-#define LEDC_CHANNEL LEDC_CHANNEL_0
-#define LEDC_TIMER   LEDC_TIMER_0
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40);
+
+// 5x5 matrix = 25 LEDs → channels 0–24
+const int ROWS = 5;
+const int COLS = 5;
+
+// Brightness array
+uint16_t matrix[ROWS][COLS];
 
 void setup() {
   Serial.begin(115200);
+  Wire.begin(21, 22);  // SDA = 21, SCL = 22
 
-  // Setup LEDC timer
-  ledc_timer_config_t ledc_timer = {
-      .speed_mode       = LEDC_HIGH_SPEED_MODE,
-      .duty_resolution  = LEDC_TIMER_8_BIT,
-      .timer_num        = LEDC_TIMER,
-      .freq_hz          = 5000,
-      .clk_cfg          = LEDC_AUTO_CLK
-  };
-  ledc_timer_config(&ledc_timer);
+  pwm.begin();
+  pwm.setPWMFreq(1000);  // 1 kHz LED frequency
+}
 
-  // Setup LEDC channel
-  ledc_channel_config_t ledc_channel_cfg = {
-      .gpio_num       = LED_PIN,
-      .speed_mode     = LEDC_HIGH_SPEED_MODE,
-      .channel        = LEDC_CHANNEL,
-      .intr_type      = LEDC_INTR_DISABLE,
-      .timer_sel      = LEDC_TIMER,
-      .duty           = 0,
-      .hpoint         = 0
-  };
-  ledc_channel_config(&ledc_channel_cfg);
+void setLED(int row, int col, int value) {
+  int channel = row * COLS + col;
+  value = constrain(value, 0, 255);
+
+  // Convert 0–255 to PCA9685 0–4095
+  int pwmVal = map(value, 0, 255, 0, 4095);
+  pwm.setPWM(channel, 0, pwmVal);
 }
 
 void loop() {
@@ -38,24 +35,19 @@ void loop() {
     char c = Serial.read();
 
     if (c == '\n') {
-      // Format: row,col,brightness
-      int comma1 = buffer.indexOf(',');
-      int comma2 = buffer.lastIndexOf(',');
+      int c1 = buffer.indexOf(',');
+      int c2 = buffer.lastIndexOf(',');
 
-      if (comma1 > 0 && comma2 > comma1) {
-        int row = buffer.substring(0, comma1).toInt();
-        int col = buffer.substring(comma1 + 1, comma2).toInt();
-        int bri = buffer.substring(comma2 + 1).toInt();
+      if (c1 > 0 && c2 > c1) {
+        int row = buffer.substring(0, c1).toInt();
+        int col = buffer.substring(c1 + 1, c2).toInt();
+        int bri = buffer.substring(c2 + 1).toInt();
 
-        bri = constrain(bri, 0, 255);
-
-        // For now: single LED only!
-        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL, bri);
-        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL);
+        setLED(row, col, bri);
       }
 
       buffer = "";
-    } 
+    }
     else {
       buffer += c;
     }

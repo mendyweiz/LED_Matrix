@@ -3,7 +3,7 @@ import serial.tools.list_ports
 import tkinter as tk
 
 # --------------------------------------------------------
-# Find ESP32
+# Find ESP32 port
 # --------------------------------------------------------
 def find_esp32_port():
     ports = serial.tools.list_ports.comports()
@@ -26,43 +26,40 @@ ser = serial.Serial(port, 115200, timeout=1)
 # GUI Setup
 # --------------------------------------------------------
 root = tk.Tk()
-root.title("LED Matrix Controller")
+root.title("PCA9685 LED Matrix Controller")
 
 ROWS = 5
 COLS = 5
 
-brightness = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+brightness = [[0] * COLS for _ in range(ROWS)]
 
 
-def send_to_esp32(r, c, v):
-    ser.write(f"{r},{c},{v}\n".encode())
+def send_to_esp(row, col, val):
+    ser.write(f"{row},{col},{val}\n".encode())
 
 
 # --------------------------------------------------------
-# Square Tile Class (acts like slider)
+# Square tile slider class
 # --------------------------------------------------------
 class Tile(tk.Frame):
-    SIZE = 80  # tile is SIZE×SIZE (square)
+    SIZE = 80
 
     def __init__(self, master, row, col):
-        super().__init__(master, width=self.SIZE, height=self.SIZE, bg="black",
-                         bd=1, relief="solid")
+        super().__init__(master, width=self.SIZE, height=self.SIZE,
+                         bg="black", bd=1, relief="solid")
         self.row = row
         self.col = col
 
         self.pack_propagate(False)
 
-        self.canvas = tk.Canvas(
-            self, width=self.SIZE, height=self.SIZE,
-            highlightthickness=0, bg="black"
-        )
+        self.canvas = tk.Canvas(self, width=self.SIZE, height=self.SIZE,
+                                highlightthickness=0, bg="black")
         self.canvas.pack(fill="both", expand=True)
 
-        # Bind mouse drag events
         self.canvas.bind("<Button-1>", self.drag)
         self.canvas.bind("<B1-Motion>", self.drag)
 
-        self.update_fill()
+        self.update_visual()
 
     def drag(self, event):
         size = self.SIZE
@@ -71,29 +68,27 @@ class Tile(tk.Frame):
         val = int((1 - y / size) * 255)
         brightness[self.row][self.col] = val
 
-        self.update_fill()
-        send_to_esp32(self.row, self.col, val)
+        self.update_visual()
+        send_to_esp(self.row, self.col, val)
 
-    def update_fill(self):
+    def update_visual(self):
         self.canvas.delete("all")
         val = brightness[self.row][self.col]
         size = self.SIZE
 
-        fill_height = int((val / 255) * size)
-
+        fill = int((val / 255) * size)
         self.canvas.create_rectangle(
-            0, size - fill_height, size, size,
+            0, size - fill, size, size,
             fill=f"#{val:02x}{val:02x}{val:02x}",
             outline=""
         )
 
 
 # --------------------------------------------------------
-# Build square 5×5 grid
+# Build 5×5 tile grid
 # --------------------------------------------------------
 for r in range(ROWS):
     for c in range(COLS):
-        t = Tile(root, r, c)
-        t.grid(row=r, column=c, padx=4, pady=4)
+        Tile(root, r, c).grid(row=r, column=c, padx=4, pady=4)
 
 root.mainloop()
