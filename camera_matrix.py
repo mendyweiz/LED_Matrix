@@ -49,6 +49,7 @@ def gamma_correct(x):
 def send_led(pwm):
     val = int(np.clip(pwm * 255, 0, 255))
     ser.write(f"0,0,{val}\n".encode())
+    return val
 
 # ===============================
 # Tkinter UI
@@ -117,7 +118,15 @@ def update_frame():
         (1 - SMOOTH) * led_pwm_gamma
     )
 
-    send_led(led_pwm_smoothed)
+    pwm_val = send_led(led_pwm_smoothed)
+
+    # ---- debug print ----
+    print(
+        f"Target={target:.2f}  "
+        f"LED={led_pwm_smoothed:.2f}  "
+        f"PWM={pwm_val:3d}  "
+        f"Error={error:+.3f}"
+    )
 
     # -----------------------------
     # Draw matrix
