@@ -1,20 +1,16 @@
-import cv2
-import numpy as np
-import tkinter as tk
-from PIL import Image, ImageTk
 import serial
 import serial.tools.list_ports
-import time
+import tkinter as tk
 
-# ===============================
-# ESP32 auto-detection
-# ===============================
+# --------------------------------------------------------
+# Find ESP32
+# --------------------------------------------------------
 def find_esp32_port():
     ports = serial.tools.list_ports.comports()
     for p in ports:
-        if ("ESP" in p.description or
-            "USB" in p.description or
-            "CP210" in p.description or
+        if ("ESP" in p.description or 
+            "USB" in p.description or 
+            "CP210" in p.description or 
             "CH910" in p.description):
             return p.device
     return None
@@ -23,150 +19,81 @@ port = find_esp32_port()
 if not port:
     raise Exception("ESP32 not found!")
 
-ser = serial.Serial(port, 115200, timeout=0.1)
-time.sleep(2)
-print(f"Connected to ESP32 on {port}")
+ser = serial.Serial(port, 115200, timeout=1)
 
-# ===============================
-# Camera
-# ===============================
-cap = cv2.VideoCapture(0)
 
-# ===============================
-# Control parameters
-# ===============================
-GAMMA = 2.2
-Kp = 0.15
-SMOOTH = 0.8
-NOISE_THRESH = 3 / 255.0
-
-led_pwm = 0.0
-led_pwm_smoothed = 0.0
-
-def gamma_correct(x):
-    return x ** (1.0 / GAMMA)
-
-def send_led(pwm):
-    val = int(np.clip(pwm * 255, 0, 255))
-    ser.write(f"0,0,{val}\n".encode())
-
-# ===============================
-# Tkinter UI
-# ===============================
+# --------------------------------------------------------
+# GUI Setup
+# --------------------------------------------------------
 root = tk.Tk()
-root.title("Camera Matrix + LED Delta Control")
+root.title("LED Matrix Controller")
 
-video_label = tk.Label(root)
-video_label.pack()
+ROWS = 5
+COLS = 5
 
-controls = tk.Frame(root)
-controls.pack(pady=5)
+brightness = [[0 for _ in range(COLS)] for _ in range(ROWS)]
 
-tk.Label(controls, text="Rows (N):").grid(row=0, column=0)
-tk.Label(controls, text="Cols (M):").grid(row=0, column=2)
 
-rows_var = tk.IntVar(value=5)
-cols_var = tk.IntVar(value=5)
+def send_to_esp32(r, c, v):
+    ser.write(f"{r},{c},{v}\n".encode())
 
-tk.Entry(controls, width=5, textvariable=rows_var).grid(row=0, column=1)
-tk.Entry(controls, width=5, textvariable=cols_var).grid(row=0, column=3)
 
-# ===============================
-# Frame loop
-# ===============================
-def update_frame():
-    global led_pwm, led_pwm_smoothed
+# --------------------------------------------------------
+# Square Tile Class (acts like slider)
+# --------------------------------------------------------
+class Tile(tk.Frame):
+    SIZE = 80  # tile is SIZE×SIZE (square)
 
-    ret, frame = cap.read()
-    if not ret:
-        root.after(10, update_frame)
-        return
+    def __init__(self, master, row, col):
+        super().__init__(master, width=self.SIZE, height=self.SIZE, bg="black",
+                         bd=1, relief="solid")
+        self.row = row
+        self.col = col
 
-    frame = cv2.flip(frame, 1)
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        self.pack_propagate(False)
 
-    h, w = gray.shape
+        self.canvas = tk.Canvas(
+            self, width=self.SIZE, height=self.SIZE,
+            highlightthickness=0, bg="black"
+        )
+        self.canvas.pack(fill="both", expand=True)
 
-    try:
-        N = max(1, rows_var.get())
-        M = max(1, cols_var.get())
-    except:
-        N, M = 5, 5
+        # Bind mouse drag events
+        self.canvas.bind("<Button-1>", self.drag)
+        self.canvas.bind("<B1-Motion>", self.drag)
 
-    bh, bw = h // N, w // M
-    vis = gray.copy()
+        self.update_fill()
 
-    # -----------------------------
-    # Block (0,0) → LED control
-    # -----------------------------
-    block00 = gray[0:bh, 0:bw]
-    target = np.mean(block00) / 255.0
+    def drag(self, event):
+        size = self.SIZE
+        y = max(0, min(size, event.y))
 
-    led_est = led_pwm_smoothed
-    error = target - led_est
+        val = int((1 - y / size) * 255)
+        brightness[self.row][self.col] = val
 
-    if abs(error) < NOISE_THRESH:
-        error = 0.0
+        self.update_fill()
+        send_to_esp32(self.row, self.col, val)
 
-    led_pwm += Kp * error
-    led_pwm = np.clip(led_pwm, 0.0, 1.0)
+    def update_fill(self):
+        self.canvas.delete("all")
+        val = brightness[self.row][self.col]
+        size = self.SIZE
 
-    led_pwm_gamma = gamma_correct(led_pwm)
-    led_pwm_smoothed = (
-        SMOOTH * led_pwm_smoothed +
-        (1 - SMOOTH) * led_pwm_gamma
-    )
+        fill_height = int((val / 255) * size)
 
-    send_led(led_pwm_smoothed)
+        self.canvas.create_rectangle(
+            0, size - fill_height, size, size,
+            fill=f"#{val:02x}{val:02x}{val:02x}",
+            outline=""
+        )
 
-    # -----------------------------
-    # Draw matrix
-    # -----------------------------
-    for i in range(N):
-        for j in range(M):
-            y1, y2 = i * bh, (i + 1) * bh
-            x1, x2 = j * bw, (j + 1) * bw
 
-            block = gray[y1:y2, x1:x2]
-            if block.size == 0:
-                continue
+# --------------------------------------------------------
+# Build square 5×5 grid
+# --------------------------------------------------------
+for r in range(ROWS):
+    for c in range(COLS):
+        t = Tile(root, r, c)
+        t.grid(row=r, column=c, padx=4, pady=4)
 
-            brightness = int(np.mean(block))
-
-            cv2.rectangle(vis, (x1, y1), (x2, y2), 255, 1)
-
-            cv2.putText(
-                vis,
-                str(brightness),
-                (x1 + 5, y1 + 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                255,
-                1
-            )
-
-    # Highlight control block (0,0)
-    cv2.rectangle(vis, (0, 0), (bw, bh), 255, 2)
-
-    # Convert for Tkinter
-    rgb = cv2.cvtColor(vis, cv2.COLOR_GRAY2RGB)
-    img = Image.fromarray(rgb)
-    imgtk = ImageTk.PhotoImage(image=img)
-
-    video_label.imgtk = imgtk
-    video_label.configure(image=imgtk)
-
-    root.after(10, update_frame)
-
-# ===============================
-# Cleanup
-# ===============================
-def on_close():
-    cap.release()
-    ser.close()
-    root.destroy()
-
-root.protocol("WM_DELETE_WINDOW", on_close)
-
-update_frame()
 root.mainloop()
