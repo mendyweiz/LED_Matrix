@@ -1,42 +1,62 @@
-#define LED_PIN 15
-#define PWM_CHANNEL 0
-#define PWM_FREQ 5000
-#define PWM_RES 8   // 8-bit (0–255)
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
 
-String inputLine = "";
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40); // PCA #1
+Adafruit_PWMServoDriver pca2 = Adafruit_PWMServoDriver(0x7E); // PCA #2
+
+// 5x5 matrix = 25 LEDs → channels 0–24
+const int ROWS = 5;
+const int COLS = 5;
+
+// Brightness array
+uint16_t matrix[ROWS][COLS];
 
 void setup() {
   Serial.begin(115200);
+  Wire.begin(21, 22);  // SDA = 21, SCL = 22
 
-  // New ESP32 core 3.x PWM API
-  ledcAttach(LED_PIN, PWM_FREQ, PWM_RES);
-  ledcWrite(LED_PIN, 0);   // LED off
-
-  Serial.println("ESP32 LED ready");
+  pwm.begin();
+  pwm.setPWMFreq(1000);  // 1 kHz LED frequency
+  pca2.begin();
+  pca2.setPWMFreq(1000);
 }
 
+void setLED(int row, int col, int value) {
+  int channel = row * COLS + col;
+  value = constrain(value, 0, 255);
+    
+  // Convert 0–255 to PCA9685 0–4095
+  int pwmVal = map(value, 0, 255, 0, 4095);
+  if (channel < 16) {
+    pwm.setPWM(channel, 0, pwmVal);          // PCA @ 0x40
+  } else {
+    pca2.setPWM(channel - 16, 0, pwmVal);    // PCA @ 0x41
+  }
+  }
+
 void loop() {
+  static String buffer = "";
+
   while (Serial.available()) {
     char c = Serial.read();
 
     if (c == '\n') {
-      processLine(inputLine);
-      inputLine = "";
-    } else {
-      inputLine += c;
+      int c1 = buffer.indexOf(',');
+      int c2 = buffer.lastIndexOf(',');
+
+      if (c1 > 0 && c2 > c1) {
+        int row = buffer.substring(0, c1).toInt();
+        int col = buffer.substring(c1 + 1, c2).toInt();
+        int bri = buffer.substring(c2 + 1).toInt();
+
+        setLED(row, col, bri);
+      }
+
+      buffer = "";
     }
-  }
-}
-
-void processLine(String line) {
-  int r, c, val;
-
-  if (sscanf(line.c_str(), "%d,%d,%d", &r, &c, &val) == 3) {
-    val = constrain(val, 0, 255);
-
-    // Only matrix tile (0,0) controls the LED
-    if (r == 0 && c == 0) {
-      ledcWrite(LED_PIN, val);
+    else {
+      buffer += c;
     }
   }
 }
