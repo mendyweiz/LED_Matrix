@@ -38,25 +38,27 @@ Kp = 0.25
 SMOOTH = 0.7
 GAMMA = 2.2
 NOISE = 2 / 255.0
+GRID_GAP = 20  # pixels between the two grids
 
-# LED state
+# LED state (delta-based)
 led = np.zeros((ROWS, COLS), dtype=np.float32)
 led_smooth = np.zeros_like(led)
 
 def gamma(x):
-    return np.power(x, 1.0 / GAMMA)
+    return np.power(np.clip(x, 0, 1), 1.0 / GAMMA)
 
-def send_matrix(mat):
+def send_delta(mat):
     for r in range(ROWS):
         for c in range(COLS):
-            val = int(np.clip(mat[r, c] * 255, 0, 255))
+            # map [-1..1] → [0..255]
+            val = int(np.clip((mat[r, c] + 1.0) * 127.5, 0, 255))
             ser.write(f"{r},{c},{val}\n".encode())
 
 # ===============================
 # Tk UI
 # ===============================
 root = tk.Tk()
-root.title("Camera → LED Matrix Control")
+root.title("Dual Grid Delta → LED Matrix")
 
 label = tk.Label(root)
 label.pack()
@@ -76,45 +78,63 @@ def update():
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     h, w = gray.shape
-    bh, bw = h // ROWS, w // COLS
+    usable_width = w - GRID_GAP
+    half = usable_width // 2
+
+    left = gray[:, :half]
+    right = gray[:, half + GRID_GAP : half * 2 + GRID_GAP]
+
+
+    bh, bw = h // ROWS, half // COLS
 
     vis = gray.copy()
-    target = np.zeros((ROWS, COLS), dtype=np.float32)
 
-    # --- Compute block brightness ---
+    left_grid = np.zeros((ROWS, COLS), dtype=np.float32)
+    right_grid = np.zeros((ROWS, COLS), dtype=np.float32)
+
+    # --- Compute both grids ---
     for r in range(ROWS):
         for c in range(COLS):
             y1, y2 = r * bh, (r + 1) * bh
             x1, x2 = c * bw, (c + 1) * bw
-            block = gray[y1:y2, x1:x2]
 
-            if block.size == 0:
+            lb = left[y1:y2, x1:x2]
+            rb = right[y1:y2, x1:x2]
+
+            if lb.size == 0 or rb.size == 0:
                 continue
 
-            target[r, c] = np.mean(block) / 255.0
+            left_grid[r, c] = np.mean(lb) / 255.0
+            right_grid[r, c] = np.mean(rb) / 255.0
 
             cv2.rectangle(vis, (x1, y1), (x2, y2), 255, 1)
-            cv2.putText(
+            cv2.rectangle(
                 vis,
-                f"{int(target[r,c]*255)}",
-                (x1 + 5, y1 + 18),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
+                (x1 + half + GRID_GAP, y1),
+                (x2 + half + GRID_GAP, y2),
                 255,
                 1
             )
 
-    # --- Control law ---
-    error = target - led
-    error[np.abs(error) < NOISE] = 0.0
 
+    # --- Delta ---
+    target_delta = right_grid - left_grid
+    target_delta[np.abs(target_delta) < NOISE] = 0.0
+
+    error = target_delta - led
     led += Kp * error
-    led = np.clip(led, 0.0, 1.0)
+    led = np.clip(led, -1.0, 1.0)
 
-    led_gamma = gamma(led)
+    led_gamma = gamma((led + 1.0) / 2.0) * 2.0 - 1.0
     led_smooth = SMOOTH * led_smooth + (1 - SMOOTH) * led_gamma
 
-    send_matrix(led_smooth)
+    send_delta(led_smooth)
+
+    # --- Console logging ---
+    print("Δ matrix:")
+    for r in range(ROWS):
+        print(" ".join(f"{led_smooth[r,c]:+.2f}" for c in range(COLS)))
+    print("-" * 40)
 
     # --- Display ---
     img = Image.fromarray(cv2.cvtColor(vis, cv2.COLOR_GRAY2RGB))
